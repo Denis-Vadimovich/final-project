@@ -64,8 +64,11 @@ func GetTask(id string) (Task, error) {
 
 	task := Task{}
 	err := row.Scan(&task.ID, &task.Date, &task.Title, &task.Comment, &task.Repeat)
+	if err == sql.ErrNoRows {
+		return task, fmt.Errorf("task not found")
+	}
 	if err != nil {
-		return Task{}, sql.ErrNoRows
+		return task, err
 	}
 
 	return task, nil

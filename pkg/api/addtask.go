@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/Denis-Vadimovich/final-project/pkg/db"
@@ -64,29 +66,29 @@ func addTaskHandler(w http.ResponseWriter, r *http.Request) {
 
 	_, err := buf.ReadFrom(r.Body)
 	if err != nil {
-		writeJsonError(w, err)
+		writeJsonError(w, err, http.StatusBadRequest)
 		return
 	}
 
 	if err = json.Unmarshal(buf.Bytes(), &task); err != nil {
-		writeJsonError(w, err)
+		writeJsonError(w, err, http.StatusBadRequest)
 		return
 	}
 
 	if task.Title == "" {
-		writeJsonError(w, fmt.Errorf("error - Title is empty"))
+		writeJsonError(w, fmt.Errorf("error - Title is empty"), http.StatusBadRequest)
 		return
 	}
 
 	err = checkDate(&task)
 	if err != nil {
-		writeJsonError(w, err)
+		writeJsonError(w, err, http.StatusBadRequest)
 		return
 	}
 
 	id, err := db.AddTask(&task)
 	if err != nil {
-		writeJsonError(w, err)
+		writeJsonError(w, err, http.StatusInternalServerError)
 		return
 	}
 
@@ -100,31 +102,36 @@ func updateTaskHandler(w http.ResponseWriter, r *http.Request) {
 
 	_, err := buf.ReadFrom(r.Body)
 	if err != nil {
-		writeJsonError(w, err)
+		writeJsonError(w, err, http.StatusBadRequest)
 		return
 	}
 
 	if err = json.Unmarshal(buf.Bytes(), &task); err != nil {
-		writeJsonError(w, err)
+		writeJsonError(w, err, http.StatusBadRequest)
 		return
 	}
 
 	if task.Title == "" {
-		writeJsonError(w, fmt.Errorf("error - Title is empty"))
+		writeJsonError(w, fmt.Errorf("error - Title is empty"), http.StatusBadRequest)
 		return
 	}
 
 	err = checkDate(&task)
 	if err != nil {
-		writeJsonError(w, err)
+		writeJsonError(w, err, http.StatusBadRequest)
 		return
 	}
 
 	err = db.UpdateTask(&task)
 	if err != nil {
-		writeJsonError(w, err)
+		if strings.Contains(err.Error(), "incorrect id") {
+			writeJsonError(w, err, http.StatusNotFound)
+		} else {
+			writeJsonError(w, err, http.StatusInternalServerError)
+		}
 		return
 	}
+
 	id, err := strconv.Atoi(task.ID)
 
 	writeJsonSuccess(w, int64(id))
@@ -142,11 +149,14 @@ func writeJsonSuccess(w http.ResponseWriter, id int64) {
 
 	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
 	w.WriteHeader(http.StatusOK)
-	w.Write(res)
+	_, err = w.Write(res)
+	if err != nil {
+		log.Printf("Failed to write response: %v", err)
+	}
 
 }
 
-func writeJsonError(w http.ResponseWriter, mes error) {
+func writeJsonError(w http.ResponseWriter, mes error, statusCode int) {
 	response := Response{Error: mes.Error()}
 	res, err := json.Marshal(response)
 	if err != nil {
@@ -155,8 +165,11 @@ func writeJsonError(w http.ResponseWriter, mes error) {
 	}
 
 	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
-	w.WriteHeader(http.StatusBadRequest)
-	w.Write(res)
+	w.WriteHeader(statusCode)
+	_, err = w.Write(res)
+	if err != nil {
+		log.Printf("Failed to write response: %v", err)
+	}
 }
 
 func writeJson(w http.ResponseWriter, task db.Task) {
@@ -169,7 +182,10 @@ func writeJson(w http.ResponseWriter, task db.Task) {
 
 	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
 	w.WriteHeader(http.StatusOK)
-	w.Write(res)
+	_, err = w.Write(res)
+	if err != nil {
+		log.Printf("Failed to write response: %v", err)
+	}
 
 }
 
@@ -196,26 +212,40 @@ func doneHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	task, err := db.GetTask(r.URL.Query().Get("id"))
+
 	if err != nil {
-		writeJsonError(w, err)
+		if strings.Contains(err.Error(), "task not found") {
+			writeJsonError(w, err, http.StatusNotFound)
+		} else {
+			writeJsonError(w, err, http.StatusInternalServerError)
+		}
 		return
 	}
 
 	if task.Repeat == "" {
 		err := db.DeleteTask(task.ID)
 		if err != nil {
-			writeJsonError(w, err)
+			if strings.Contains(err.Error(), "incorrect id") {
+				writeJsonError(w, err, http.StatusNotFound)
+			} else {
+				writeJsonError(w, err, http.StatusInternalServerError)
+			}
 			return
 		}
 	} else {
 		nextDate, err := NextDate(time.Now(), task.Date, task.Repeat)
 		if err != nil {
-			writeJsonError(w, err)
+			writeJsonError(w, err, http.StatusBadRequest)
 		}
 
 		err = db.UpdateDate(nextDate, task.ID)
 		if err != nil {
-			writeJsonError(w, err)
+			if strings.Contains(err.Error(), "incorrect id") {
+				writeJsonError(w, err, http.StatusNotFound)
+			} else {
+				writeJsonError(w, err, http.StatusInternalServerError)
+			}
+			return
 		}
 	}
 	writeJsonEmpty(w)
@@ -230,7 +260,11 @@ func taskHandler(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		task, err := db.GetTask(r.URL.Query().Get("id"))
 		if err != nil {
-			writeJsonError(w, err)
+			if strings.Contains(err.Error(), "task not found") {
+				writeJsonError(w, err, http.StatusNotFound)
+			} else {
+				writeJsonError(w, err, http.StatusInternalServerError)
+			}
 			return
 		}
 		writeJson(w, task)
@@ -239,7 +273,11 @@ func taskHandler(w http.ResponseWriter, r *http.Request) {
 	case http.MethodDelete:
 		err := db.DeleteTask(r.URL.Query().Get("id"))
 		if err != nil {
-			writeJsonError(w, err)
+			if strings.Contains(err.Error(), "incorrect id") {
+				writeJsonError(w, err, http.StatusNotFound)
+			} else {
+				writeJsonError(w, err, http.StatusInternalServerError)
+			}
 			return
 		}
 		writeJsonEmpty(w)
